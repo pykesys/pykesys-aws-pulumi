@@ -1,0 +1,170 @@
+// Pulumi configuration using Chef Zero for EC2 instance provisioning
+import * as aws from "@pulumi/aws";
+import * as pulumi from "@pulumi/pulumi";
+
+// Common variables
+const config = new pulumi.Config();
+const region = aws.config.region || "us-east-1";
+
+// IAM Configuration
+const infraUser = new aws.iam.User("pykesys-infra", {
+    forceDestroy: true,
+    tags: { Application: "Pulumi Deployment" },
+});
+
+const infraPolicy = new aws.iam.Policy("pykesys-infra-policy", {
+    policy: JSON.stringify({
+        Version: "2012-10-17",
+        Statement: [
+            {
+                Effect: "Allow",
+                Action: ["ec2:*", "efs:*", "route53:*", "iam:*"],
+                Resource: "*",
+            },
+        ],
+    }),
+});
+
+new aws.iam.UserPolicyAttachment("pykesys-infra-attach", {
+    user: infraUser.name,
+    policyArn: infraPolicy.arn,
+});
+
+const mfaDevice = new aws.iam.VirtualMfaDevice("pykesys-infra-mfa", {
+    virtualMfaDeviceName: "pykesys-infra-mfa",
+    users: [infraUser.name],
+});
+
+// Security groups
+const createSecurityGroup = (name: string, ingressRules: aws.types.input.ec2.SecurityGroupIngress[]) =>
+    new aws.ec2.SecurityGroup(name, {
+        ingress: ingressRules,
+        egress: [{ protocol: "-1", fromPort: 0, toPort: 0, cidrBlocks: ["0.0.0.0/0"] }],
+        tags: { Name: name },
+    });
+
+const appSg = createSecurityGroup("app-sg", [
+    { protocol: "tcp", fromPort: 80, toPort: 80, cidrBlocks: ["0.0.0.0/0"] }, // nginx
+    { protocol: "tcp", fromPort: 443, toPort: 443, cidrBlocks: ["0.0.0.0/0"] }, // https
+]);
+
+const dbSg = createSecurityGroup("db-sg", [
+    { protocol: "tcp", fromPort: 3306, toPort: 3306, cidrBlocks: ["0.0.0.0/0"] }, // MySQL
+]);
+
+const nocSg = createSecurityGroup("noc-sg", [
+    { protocol: "tcp", fromPort: 389, toPort: 389, cidrBlocks: ["0.0.0.0/0"] }, // OpenLDAP
+    { protocol: "tcp", fromPort: 3000, toPort: 3000, cidrBlocks: ["0.0.0.0/0"] }, // Grafana
+    { protocol: "tcp", fromPort: 8086, toPort: 8086, cidrBlocks: ["0.0.0.0/0"] }, // InfluxDB
+    { protocol: "tcp", fromPort: 25, toPort: 25, cidrBlocks: ["0.0.0.0/0"] },   // SMTP (Postfix)
+]);
+
+// EFS
+const efs = new aws.efs.FileSystem("pykesys-vol", {
+    tags: { Name: "pykesys-vol" },
+});
+
+// Chef Zero User Data
+const createInstanceWithChefZero = (
+    name: string,
+    ami: string,
+    instanceType: string,
+    securityGroup: aws.ec2.SecurityGroup,
+    tags: Record<string, string>,
+    chefCookbooksUrl: string,
+    chefRunList: string[]
+) => {
+    const userDataScript = `#!/bin/bash
+set -e
+
+# Install Chef Client
+curl -L https://omnitruck.chef.io/install.sh | bash
+
+# Download and Configure Cookbooks
+mkdir -p /tmp/chef-repo/cookbooks
+cd /tmp/chef-repo
+curl -L ${chefCookbooksUrl} | tar -xz -C cookbooks
+
+# Generate Chef Configuration
+mkdir -p /etc/chef
+cat <<EOF > /etc/chef/client.rb
+log_level        :info
+log_location     STDOUT
+chef_server_url  "http://localhost:8889"
+EOF
+
+cat <<EOF > /etc/chef/first-boot.json
+{
+  "run_list": ${JSON.stringify(chefRunList)}
+}
+EOF
+
+# Start Chef Zero in the Background
+chef-zero --host 0.0.0.0 --port 8889 &
+sleep 5 # Wait for Chef Zero to start
+
+# Run Chef Client
+chef-client -j /etc/chef/first-boot.json
+`;
+
+    return new aws.ec2.Instance(name, {
+        ami: ami,
+        instanceType: instanceType,
+        securityGroups: [securityGroup.name],
+        tags: tags,
+        userData: userDataScript,
+    });
+};
+
+const appInstance = createInstanceWithChefZero(
+    "app-instance",
+    "ami-0123456789abcdef0", // Replace with a valid AMI ID
+    "t2.micro",
+    appSg,
+    { Name: "app.pykesys.com" },
+    "https://example.com/cookbooks.tar.gz", // URL to cookbooks archive
+    ["recipe[nginx]", "recipe[php]", "recipe[base]"]
+);
+
+const dbInstance = createInstanceWithChefZero(
+    "db-instance",
+    "ami-0123456789abcdef0", // Replace with a valid AMI ID
+    "t2.micro",
+    dbSg,
+    { Name: "db.pykesys.com" },
+    "https://example.com/cookbooks.tar.gz",
+    ["recipe[mysql::server]", "recipe[base]"]
+);
+
+const nocInstance = createInstanceWithChefZero(
+    "noc-instance",
+    "ami-0123456789abcdef0", // Replace with a valid AMI ID
+    "t2.micro",
+    nocSg,
+    { Name: "noc.pykesys.com" },
+    "https://example.com/cookbooks.tar.gz",
+    ["recipe[openldap]", "recipe[influxdb]", "recipe[grafana]", "recipe[sendmail]", "recipe[postfix]", "recipe[base]"]
+);
+
+// Route53
+const hostedZone = new aws.route53.Zone("pykesys-com", {
+    name: "pykesys.com",
+});
+
+new aws.route53.Record("webapp-redirect", {
+    zoneId: hostedZone.zoneId,
+    name: "www.pykesys.com",
+    type: "CNAME",
+    ttl: 300,
+    records: ["app.pykesys.com"],
+});
+
+new aws.route53.Record("email-redirect", {
+    zoneId: hostedZone.zoneId,
+    name: "mail.pykesys.com",
+    type: "MX",
+    ttl: 300,
+    records: ["noc.pykesys.com"],
+});
+
+

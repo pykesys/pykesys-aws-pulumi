@@ -1,0 +1,196 @@
+same as the terraform aws-deploy-4 but in pulumi
+
+--------------
+
+Here is a complete Pulumi configuration rewritten from your Terraform setup. This uses **TypeScript** for defining the AWS infrastructure:
+
+---
+
+### **Pulumi Configuration**
+
+#### **`index.ts`**
+```typescript
+import * as aws from "@pulumi/aws";
+import * as pulumi from "@pulumi/pulumi";
+
+// Config Variables
+const config = new pulumi.Config();
+const appAmiId = config.require("appAmiId");
+const dbAmiId = config.require("dbAmiId");
+const nocAmiId = config.require("nocAmiId");
+const zoneId = config.require("zoneId");
+
+// IAM User for Terraform Management
+const infraUser = new aws.iam.User("pykesys-infra", {
+    name: "pykesys-infra",
+});
+
+new aws.iam.UserPolicy("pykesys-infra-policy", {
+    user: infraUser.name,
+    policy: JSON.stringify({
+        Version: "2012-10-17",
+        Statement: [
+            {
+                Action: "*",
+                Effect: "Allow",
+                Resource: "*",
+            },
+        ],
+    }),
+});
+
+// IAM Roles for Applications
+const dbRole = new aws.iam.Role("pykesys-db-user", {
+    assumeRolePolicy: JSON.stringify({
+        Version: "2012-10-17",
+        Statement: [
+            {
+                Action: "sts:AssumeRole",
+                Effect: "Allow",
+                Principal: {
+                    Service: "ec2.amazonaws.com",
+                },
+            },
+        ],
+    }),
+});
+
+const appRole = new aws.iam.Role("pykesys-app-user", {
+    assumeRolePolicy: JSON.stringify({
+        Version: "2012-10-17",
+        Statement: [
+            {
+                Action: "sts:AssumeRole",
+                Effect: "Allow",
+                Principal: {
+                    Service: "ec2.amazonaws.com",
+                },
+            },
+        ],
+    }),
+});
+
+// VPC and Subnet
+const vpc = new aws.ec2.Vpc("pykesys-vpc", {
+    cidrBlock: "10.0.0.0/16",
+});
+
+const subnet = new aws.ec2.Subnet("pykesys-subnet", {
+    vpcId: vpc.id,
+    cidrBlock: "10.0.1.0/24",
+    mapPublicIpOnLaunch: true,
+});
+
+// EFS Volume
+const efs = new aws.efs.FileSystem("pykesys-vol", {});
+
+const efsMountTarget = new aws.efs.MountTarget("pykesys-vol-mount", {
+    fileSystemId: efs.id,
+    subnetId: subnet.id,
+});
+
+// Security Groups
+const createSecurityGroup = (name: string, ingressRules: aws.types.input.ec2.SecurityGroupIngress[]) => {
+    return new aws.ec2.SecurityGroup(name, {
+        vpcId: vpc.id,
+        ingress: ingressRules,
+        egress: [
+            {
+                protocol: "-1",
+                fromPort: 0,
+                toPort: 0,
+                cidrBlocks: ["0.0.0.0/0"],
+            },
+        ],
+    });
+};
+
+const appSg = createSecurityGroup("app-sg", [
+    { protocol: "tcp", fromPort: 80, toPort: 80, cidrBlocks: ["0.0.0.0/0"] },
+    { protocol: "tcp", fromPort: 443, toPort: 443, cidrBlocks: ["0.0.0.0/0"] },
+]);
+
+const dbSg = createSecurityGroup("db-sg", [
+    { protocol: "tcp", fromPort: 3306, toPort: 3306, cidrBlocks: ["10.0.0.0/16"] },
+]);
+
+const nocSg = createSecurityGroup("noc-sg", [
+    { protocol: "tcp", fromPort: 389, toPort: 389, cidrBlocks: ["10.0.0.0/16"] },
+    { protocol: "tcp", fromPort: 8086, toPort: 8086, cidrBlocks: ["10.0.0.0/16"] },
+]);
+
+// EC2 Instances
+const createInstance = (name: string, ami: string, securityGroup: aws.ec2.SecurityGroup, tags: Record<string, string>) => {
+    return new aws.ec2.Instance(name, {
+        ami: ami,
+        instanceType: "t2.micro",
+        subnetId: subnet.id,
+        securityGroups: [securityGroup.name],
+        tags: tags,
+    });
+};
+
+const appInstance = createInstance("app-instance", appAmiId, appSg, { Name: "app.pykesys.com" });
+const dbInstance = createInstance("db-instance", dbAmiId, dbSg, { Name: "db.pykesys.com" });
+const nocInstance = createInstance("noc-instance", nocAmiId, nocSg, { Name: "noc.pykesys.com" });
+
+// Route 53 Records
+const createDnsRecord = (name: string, targetInstance: aws.ec2.Instance) => {
+    return new aws.route53.Record(name, {
+        zoneId: zoneId,
+        name: `${name}.pykesys.com`,
+        type: "A",
+        ttl: 300,
+        records: [targetInstance.publicIp],
+    });
+};
+
+createDnsRecord("app", appInstance);
+createDnsRecord("db", dbInstance);
+createDnsRecord("noc", nocInstance);
+
+new aws.route53.Record("pykesys-com-redirect", {
+    zoneId: zoneId,
+    name: "pykesys.com",
+    type: "CNAME",
+    ttl: 300,
+    records: ["app.pykesys.com"],
+});
+```
+
+---
+
+### **Secrets Management**
+
+Pulumi makes it easy to manage sensitive data, such as passwords or private keys, using its built-in secrets management.
+
+#### Example:
+```typescript
+const dbPassword = config.requireSecret("dbPassword");
+```
+
+This keeps secrets secure by encrypting them in Pulumi's backend.
+
+---
+
+### **Steps to Deploy**
+
+1. **Install Pulumi CLI**: Follow [Pulumi's installation guide](https://www.pulumi.com/docs/get-started/install/).
+2. **Install AWS CLI**: Ensure you have the AWS CLI installed and configured.
+3. **Set Up Your Project**:
+   - Run `pulumi new aws-typescript` to create a new project.
+   - Replace the default `index.ts` with the above script.
+4. **Set Configurations**:
+   - Run `pulumi config set appAmiId <AMI_ID>` for the web app instance.
+   - Run `pulumi config set dbAmiId <AMI_ID>` for the database instance.
+   - Run `pulumi config set nocAmiId <AMI_ID>` for the NOC instance.
+   - Run `pulumi config set zoneId <ROUTE53_ZONE_ID>`.
+5. **Deploy Infrastructure**:
+   - Preview the changes with `pulumi preview`.
+   - Deploy with `pulumi up`.
+
+---
+
+This Pulumi code achieves the same infrastructure deployment as Terraform but leverages a programming language (TypeScript), making it more dynamic, testable, and maintainable. Let me know if you need further refinements! 🚀
+
+

@@ -1,0 +1,110 @@
+Pulumi can execute configuration management tools like **Chef**, **Ansible**, or even custom scripts using **Provisioners** or by integrating with `cloud-init` during instance creation. Unlike Terraform, Pulumi doesn't natively include provisioners. Instead, it uses **User Data Scripts** or external tools.
+
+Here’s how you can configure **Chef** to provision EC2 instances in Pulumi:
+
+---
+
+### **Chef Provisioning in Pulumi**
+
+1. **Install Chef Client**: Use a **User Data Script** to install and configure Chef on the instance when it boots.
+
+2. **Run Chef Recipes**: Use the Chef client installed in the user data script to pull recipes from your Chef server or a local cookbook repository.
+
+---
+
+### **Updated Pulumi Configuration with Chef Provisioning**
+
+Below is an updated version of the Pulumi code that includes Chef provisioning via **User Data**.
+
+```typescript
+const createInstanceWithChef = (name: string, ami: string, securityGroup: aws.ec2.SecurityGroup, tags: Record<string, string>, chefRunList: string[]) => {
+    // Chef User Data Script
+    const userDataScript = `#!/bin/bash
+set -e
+
+# Install Chef
+curl -L https://omnitruck.chef.io/install.sh | bash
+
+# Configure Chef
+mkdir -p /etc/chef
+cat <<EOF > /etc/chef/client.rb
+log_level        :info
+log_location     STDOUT
+chef_server_url  "https://your-chef-server-url"
+validation_client_name "chef-validator"
+EOF
+
+cat <<EOF > /etc/chef/first-boot.json
+{
+  "run_list": ${JSON.stringify(chefRunList)}
+}
+EOF
+
+# Run Chef Client
+chef-client -j /etc/chef/first-boot.json
+`;
+
+    return new aws.ec2.Instance(name, {
+        ami: ami,
+        instanceType: "t2.micro",
+        subnetId: subnet.id,
+        securityGroups: [securityGroup.name],
+        tags: tags,
+        userData: userDataScript, // Pass the Chef provisioning script here
+    });
+};
+
+// EC2 Instances with Chef Provisioning
+const appInstance = createInstanceWithChef(
+    "app-instance",
+    appAmiId,
+    appSg,
+    { Name: "app.pykesys.com" },
+    ["recipe[nginx]", "recipe[php]"]
+);
+
+const dbInstance = createInstanceWithChef(
+    "db-instance",
+    dbAmiId,
+    dbSg,
+    { Name: "db.pykesys.com" },
+    ["recipe[mysql::server]"]
+);
+
+const nocInstance = createInstanceWithChef(
+    "noc-instance",
+    nocAmiId,
+    nocSg,
+    { Name: "noc.pykesys.com" },
+    ["recipe[openldap]", "recipe[influxdb]", "recipe[grafana]", "recipe[sendmail]"]
+);
+```
+
+---
+
+### **Explanation**
+
+1. **User Data Script**:
+   - This script runs at boot to install Chef, configure it, and execute the provided run list.
+   - Replace `"https://your-chef-server-url"` with the URL of your Chef server.
+
+2. **Chef Configuration**:
+   - The `client.rb` file configures Chef to connect to your Chef server.
+   - The `first-boot.json` specifies the initial run list for the instance.
+
+3. **Run Chef Recipes**:
+   - Pass the required recipes in the `chefRunList` parameter when calling `createInstanceWithChef`.
+
+---
+
+### **Advantages**
+
+- This approach keeps the Pulumi configuration focused on infrastructure while Chef manages application and server configuration.
+- You can dynamically adjust the `chefRunList` parameter for different instance types.
+
+---
+
+### **Optional: Use AWS Systems Manager (SSM)**
+For a more modern and secure approach, you can use **AWS Systems Manager (SSM)** to execute Chef provisioning without relying solely on user data. Let me know if you’d like to see an SSM-based example!
+
+
