@@ -12,4 +12,15 @@ Unified Stacks: Pulumi can manage both infrastructure and application code in th
 
 Pulumi’s approach aligns well with modern software development practices, making it a powerful choice for teams comfortable with coding. However, Terraform has its strengths, such as a simpler learning curve for those who prefer declarative configurations or YAML-style syntax. Both tools have their place, depending on the team's expertise and the project's needs.
 
+----------
+🧱 Included Projects:
+hosted-zone: Defines the pykesys.com Route 53 hosted zone
+
+gitlab-stack: Placeholder for GitLab deployment referencing the hosted zone
+
+cm-stack: Placeholder for Chef, Ansible, Artifactory stack
+
+Each has its own Pulumi.yaml for isolated configuration and state management.
+Would you like to wire these stacks to share outputs using Pulumi’s StackReference next? ​
+
 

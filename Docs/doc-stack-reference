@@ -1,0 +1,65 @@
+# Create StackReference integration code for gitlab-stack and cm-stack
+stack_reference_code = {
+    "pulumi-infra/gitlab-stack/gitlab.py": """\
+import pulumi
+import pulumi_aws as aws
+
+# Reference hosted-zone stack
+hosted_zone = pulumi.StackReference("hosted-zone")
+
+zone_id = hosted_zone.get_output("zone_id")
+
+# Example: Create DNS record for GitLab
+gitlab_record = aws.route53.Record("gitlab-record",
+    name="gitlab.pykesys.com",
+    type="A",
+    ttl=300,
+    zone_id=zone_id,
+    records=["1.2.3.4"]  # Replace with actual instance IP
+)
+
+pulumi.export("gitlab_dns", gitlab_record.fqdn)
+""",
+    "pulumi-infra/cm-stack/cm.py": """\
+import pulumi
+import pulumi_aws as aws
+
+# Reference hosted-zone stack
+hosted_zone = pulumi.StackReference("hosted-zone")
+
+zone_id = hosted_zone.get_output("zone_id")
+
+# Example: Create DNS record for CM services
+cm_record = aws.route53.Record("cm-record",
+    name="cm.pykesys.com",
+    type="A",
+    ttl=300,
+    zone_id=zone_id,
+    records=["1.2.3.4"]  # Replace with actual instance IP
+)
+
+pulumi.export("cm_dns", cm_record.fqdn)
+"""
+}
+
+# Write updated files
+for path, content in stack_reference_code.items():
+    full_path = os.path.join("/mnt/data", path)
+    with open(full_path, "w") as f:
+        f.write(content)
+
+"/mnt/data/pulumi-infra-scaffold.zip (already contains base scaffold; these files were updated inline)"
+
+✅ The gitlab-stack and cm-stack Pulumi scripts have now been updated to use StackReference for retrieving the hosted zone ID from the hosted-zone stack.
+
+They now support:
+
+DNS record creation using outputs from another stack
+
+Clean separation of infrastructure responsibilities
+
+Easy coordination across stacks
+
+Let me know if you’d like me to repackage the updated zip, or extend this further with dynamic IP binding from deployed EC2 instances. ​
+
+

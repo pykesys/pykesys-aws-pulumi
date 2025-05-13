@@ -1,0 +1,3 @@
+name: gitlab-stack
+runtime: python
+description: GitLab deployment using existing Route 53 zone
